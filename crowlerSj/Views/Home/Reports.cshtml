@@ -1,0 +1,39 @@
+﻿@{
+    ViewData["Title"] = "Reports";
+    Layout = "~/Views/Shared/_Layout.cshtml";
+}
+
+@model List<SearchResult>
+
+<div class="container">
+    <h1 class="mt-5">Reports</h1>
+    <div class="row mt-3">
+        @if (Model != null && Model.Count > 0)
+        {
+            @foreach (var result in Model)
+            {
+                <div class="col-md-4">
+                    <div class="card mb-4 shadow-sm">
+                        <div class="card-body">
+                            <h5 class="card-title">@result.Title</h5>
+                            <p class="card-text">@result.Snippet</p>
+                            <p class="card-text"><strong>Phone:</strong> @result.Phone</p>
+                            <p class="card-text"><strong>Address:</strong> @result.Address</p>
+                            <p class="card-text"><strong>Category:</strong> @result.Category</p>
+                            <a href="@result.Link" class="btn btn-primary" target="_blank">Visit Link</a>
+                        </div>
+                    </div>
+                </div>
+            }
+        }
+        else
+        {
+            <p>No results found.</p>
+        }
+    </div>
+    <div class="row mt-3">
+        <div class="col-md-12">
+            <a href="@Url.Action("DownloadExcel", "home")" class="btn btn-success">Download Excel</a>
+        </div>
+    </div>
+</div>
