@@ -1,5 +1,6 @@
 ﻿using crowlerSj.Db;
 using crowlerSj.service;
+using crowlerSj.signalR;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.HttpsPolicy;
@@ -32,7 +33,7 @@ namespace crowlerSj
             services.AddScoped<SearchContext>();
             // ثبت HttpClient
             services.AddHttpClient();
-
+            services.AddSignalR();
             // سرویس GoogleSearchService را ثبت کنید
             services.AddTransient<GoogleSearchService>();
         }
@@ -62,6 +63,7 @@ namespace crowlerSj
                 endpoints.MapControllerRoute(
                     name: "default",
                     pattern: "{controller=Home}/{action=Index}/{id?}");
+                endpoints.MapHub<CrawlerHub>("/crawlerHub");
             });
         }
     }

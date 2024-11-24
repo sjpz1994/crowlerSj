@@ -5,7 +5,6 @@ using System.Linq;
 using System.Net.Http;
 using System.Threading.Tasks;
 using System.Text.RegularExpressions;
-using System;
 
 public class CrawlerController : Controller
 {
@@ -98,17 +97,4 @@ public class CrawlerController : Controller
             result.Category = "نامشخص";
         }
     }
-}
-
-public class SearchResult
-{
-    public int Id { get; set; }
-    public string Title { get; set; }
-    public string Link { get; set; }
-    public string Snippet { get; set; }
-    public string Phone { get; set; }
-    public string Email { get; set; }
-    public string Address { get; set; }
-    public string Category { get; set; }
-    public DateTime InsertTime { get; set; } = DateTime.Now;
 }

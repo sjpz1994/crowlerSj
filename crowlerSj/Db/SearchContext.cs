@@ -15,7 +15,21 @@ namespace crowlerSj.Db
         }
 
         public DbSet<SearchResult> SearchResults { get; set; }
+        public DbSet<Crowl> Crowls { get; set; }
+        public DbSet<Setting> Settings { get; set; }
+   
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        //seed Data
+        SeedData(modelBuilder);
     }
-
-
+    private void SeedData(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<Setting>().HasData(new Setting
+        {
+            Id = 1,
+            IsCrowl=false
+        });
+    }
+}
 }

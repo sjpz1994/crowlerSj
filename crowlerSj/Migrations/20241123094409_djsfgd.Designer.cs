@@ -10,8 +10,8 @@ using crowlerSj.Db;
 namespace crowlerSj.Migrations
 {
     [DbContext(typeof(SearchContext))]
-    [Migration("20241013103819_dssfggh")]
-    partial class dssfggh
+    [Migration("20241123094409_djsfgd")]
+    partial class djsfgd
     {
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
@@ -21,11 +21,29 @@ namespace crowlerSj.Migrations
                 .HasAnnotation("ProductVersion", "5.0.17")
                 .HasAnnotation("SqlServer:ValueGenerationStrategy", SqlServerValueGenerationStrategy.IdentityColumn);
 
+            modelBuilder.Entity("Crowl", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasAnnotation("SqlServer:ValueGenerationStrategy", SqlServerValueGenerationStrategy.IdentityColumn);
+
+                    b.Property<DateTime>("InsertTime")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Title")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("Crowls");
+                });
+
             modelBuilder.Entity("SearchResult", b =>
                 {
-                    b.Property<int>("Id")
+                    b.Property<long>("Id")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("int")
+                        .HasColumnType("bigint")
                         .HasAnnotation("SqlServer:ValueGenerationStrategy", SqlServerValueGenerationStrategy.IdentityColumn);
 
                     b.Property<string>("Address")
@@ -33,6 +51,9 @@ namespace crowlerSj.Migrations
 
                     b.Property<string>("Category")
                         .HasColumnType("nvarchar(max)");
+
+                    b.Property<long>("CrowlId")
+                        .HasColumnType("bigint");
 
                     b.Property<string>("Email")
                         .HasColumnType("nvarchar(max)");
@@ -54,7 +75,40 @@ namespace crowlerSj.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("CrowlId");
+
                     b.ToTable("SearchResults");
+                });
+
+            modelBuilder.Entity("Setting", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasAnnotation("SqlServer:ValueGenerationStrategy", SqlServerValueGenerationStrategy.IdentityColumn);
+
+                    b.Property<bool>("IsCrowl")
+                        .HasColumnType("bit");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("Settings");
+                });
+
+            modelBuilder.Entity("SearchResult", b =>
+                {
+                    b.HasOne("Crowl", "Crowl")
+                        .WithMany("SearchResults")
+                        .HasForeignKey("CrowlId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Crowl");
+                });
+
+            modelBuilder.Entity("Crowl", b =>
+                {
+                    b.Navigation("SearchResults");
                 });
 #pragma warning restore 612, 618
         }
