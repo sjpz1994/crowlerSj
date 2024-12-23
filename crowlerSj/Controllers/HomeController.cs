@@ -60,7 +60,9 @@ namespace CrowlerSj.Controllers
 
             if (crowlId ==0 )
             {
-                var crowl = _context.Crowls.Add(new Crowl { });
+                var crowl = _context.Crowls.Add(new Crowl {Title=search });
+                _context.SaveChanges();
+
                 crowlId = crowl.Entity.Id;
             }
 
