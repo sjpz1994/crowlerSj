@@ -3,6 +3,7 @@ using crowlerSj.Db;
 using crowlerSj.signalR;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using OpenQA.Selenium;
@@ -10,6 +11,7 @@ using OpenQA.Selenium.Chrome;
 using OpenQA.Selenium.Support.UI;
 using System;
 using System.Collections.Generic;
+using System.Data.Common;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -60,8 +62,10 @@ namespace CrowlerSj.Controllers
 
             if (crowlId ==0 )
             {
-                var crowl = _context.Crowls.Add(new Crowl { });
+                var crowl = _context.Crowls.Add(new Crowl {Title=search });
+                _context.SaveChanges();
                 crowlId = crowl.Entity.Id;
+
             }
 
             _cancellationTokenSource = new CancellationTokenSource();
@@ -465,6 +469,47 @@ namespace CrowlerSj.Controllers
 
               
                 return View(reports);
+            }
+        }
+        public IActionResult Delete(long crowlId)
+        {
+            using (var scope = _scopeFactory.CreateScope())
+            {
+                var context = scope.ServiceProvider.GetRequiredService<SearchContext>();
+
+                try
+                {
+                    // پیدا کردن Crowl با crowlId
+                    var crowl = context.Crowls
+                        .Include(c => c.SearchResults) // لود کردن SearchResults مرتبط
+                        .FirstOrDefault(c => c.Id == crowlId);
+
+                    if (crowl == null)
+                    {
+                        return NotFound();
+                    }
+
+                    // حذف SearchResults مرتبط
+                    if (crowl.SearchResults?.Any() == true)
+                    {
+                        context.SearchResults.RemoveRange(crowl.SearchResults);
+                    }
+
+                    // حذف خود Crowl
+                    context.Crowls.Remove(crowl);
+
+                    // ذخیره تغییرات
+                    context.SaveChanges();
+                }
+                catch (Exception ex)
+                {
+                    // فقط یه لاگ ساده برای دیباگ
+                    System.Diagnostics.Debug.WriteLine($"Error deleting Crowl ID {crowlId}: {ex.Message}");
+                    return StatusCode(500, "An error occurred while deleting the record.");
+                }
+
+                // ریدایرکت به لیست
+                return Redirect("~/home/list");
             }
         }
 

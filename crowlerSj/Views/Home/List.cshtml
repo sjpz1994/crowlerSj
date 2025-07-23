@@ -14,7 +14,10 @@
                 {
                     <li class="list-group-item d-flex justify-content-between align-items-center">
                         @d.InsertTime.ToString("yyyy/MM/dd HH:mm")
+                        <span> _ </span>
+                        @d.Title
                         <a href="~/home/reports?crowlId=@d.Id" class="btn btn-primary btn-sm">مشاهده</a>
+                        <a href="~/home/delete?crowlId=@d.Id" class="btn btn-danger btn-sm">حذف</a>
                     </li>
                 }
             </ul>
