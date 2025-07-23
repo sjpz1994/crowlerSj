@@ -12,14 +12,13 @@
             <ul class="list-group">
                 @foreach (var d in Model)
                 {
-                <li class="list-group-item d-flex justify-content-between align-items-center">
-                    @d.InsertTime.ToString("yyyy/MM/dd HH:mm")
-                    <a href="~/home/reports?crowlId=@d.Id" class="btn btn-primary btn-sm">مشاهده</a>
-                    <form method="post" asp-controller="Home" asp-action="start">
-                        <input type="hidden" value="@d.Title" name="search" />
-                        <button type="submit" class="btn btn-success">▶ شروع</button>
-                    </form>
-                </li>
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        @d.InsertTime.ToString("yyyy/MM/dd HH:mm")
+                        <span> _ </span>
+                        @d.Title
+                        <a href="~/home/reports?crowlId=@d.Id" class="btn btn-primary btn-sm">مشاهده</a>
+                        <a href="~/home/delete?crowlId=@d.Id" class="btn btn-danger btn-sm">حذف</a>
+                    </li>
                 }
             </ul>
         </div>
