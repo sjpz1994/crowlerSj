@@ -1,52 +1,52 @@
 ﻿@{
-    ViewData["Title"] = "Home Page";
+    ViewData["Title"] = "صفحه اصلی";
 }
 
 <div class="text-center">
-    <h1 class="display-4">Welcome</h1>
-    <p>Learn about <a href="https://docs.microsoft.com/aspnet/core">building Web apps with ASP.NET Core</a>.</p>
+    <h1 class="display-4">خوش آمدید</h1>
+    <p>درباره <a href="https://docs.microsoft.com/aspnet/core">ساخت اپلیکیشن‌های وب با ASP.NET Core</a> بیشتر بدانید.</p>
 
-    @if (ViewBag.IsCrawlerRunning != null && (bool)ViewBag.IsCrawlerRunning)
+    @if (ViewBag.ErrorMessage != null)
     {
-        <p>کرولر در حال اجراست...</p>
-        <form method="post" asp-controller="Home" asp-action="Stop">
-            <button type="submit" class="btn btn-danger">■ توقف</button>
-        </form>
-    }
-    else
-    {
-        <p>کرولر متوقف شده است.</p>
-        <form method="post" asp-controller="Home" asp-action="start">
-            <input type="text" name="search" style="width: 70%; direction: rtl;" placeholder="کلیدواژه جستجو" />
-            <button type="submit" class="btn btn-success">▶ شروع</button>
-        </form>
+        <p class="text-danger">@ViewBag.ErrorMessage</p>
     }
 
-    <p> develop by sjpz.ir </p>
+    <form method="post" asp-controller="Home" asp-action="Start">
+        <input type="text" name="search" style="width: 70%; direction: rtl;" placeholder="کلیدواژه جستجو" required />
+        <input type="hidden" name="crowlId" value="0" />
+        <button type="submit" class="btn btn-success">▶ شروع کرولر</button>
+    </form>
 
-    <a href="~/home/List"> مشاهده گزارشات </a>
+    <p>توسعه‌یافته توسط <a href="https://sjpz.ir">sjpz.ir</a></p>
+    <a href="~/home/List" class="btn btn-primary">مشاهده گزارشات</a>
+
+    <div class="mt-4">
+        <h3>لاگ‌های کرولر</h3>
+        @if (ViewBag.Logs != null && ViewBag.Logs.Count > 0)
+        {
+            <table class="table table-bordered table-striped">
+                <thead>
+                    <tr>
+                        <th>زمان</th>
+                        <th>سطح</th>
+                        <th>پیام</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var log in ViewBag.Logs)
+                    {
+                        <tr class="@(log.Level == "Error" ? "table-danger" : log.Level == "Warning" ? "table-warning" : "")">
+                            <td>@log.Timestamp.ToString("yyyy/MM/dd HH:mm:ss")</td>
+                            <td>@log.Level</td>
+                            <td>@log.Message</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+        else
+        {
+            <p>هیچ لاگی برای نمایش وجود ندارد.</p>
+        }
+    </div>
 </div>
-
-<script>
-
-    const connection = new signalR.HubConnectionBuilder()
-        .withUrl("/crawlerHub")
-        .build();
-
-    connection.on("ReceiveMessage", function (message) {
-        console.log(message); // می‌توانید تغییرات دلخواه در UI داشته باشید
-    });
-
-    connection.start().catch(function (err) {
-        return console.error(err.toString());
-    });
-
-
-
-    document.addEventListener('DOMContentLoaded', function () {
-        setInterval(function () {
-            location.reload();
-        }, 9000); // 300 میلی‌ثانیه برابر است با 3 ثانیه
-    });
-</script>
-

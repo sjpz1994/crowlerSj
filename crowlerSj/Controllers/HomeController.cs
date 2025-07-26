@@ -1,8 +1,7 @@
 ﻿using ClosedXML.Excel;
 using crowlerSj.Db;
-using crowlerSj.signalR;
+using crowlerSj.Models;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -11,7 +10,6 @@ using OpenQA.Selenium.Chrome;
 using OpenQA.Selenium.Support.UI;
 using System;
 using System.Collections.Generic;
-using System.Data.Common;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -28,8 +26,8 @@ namespace CrowlerSj.Controllers
         private readonly ILogger<HomeController> _logger;
         private readonly SearchContext _context;
         private bool _isCrawlerRunning = false;
-        private static CancellationTokenSource _cancellationTokenSource = new CancellationTokenSource();
-
+        private CancellationTokenSource _cancellationTokenSource;
+        private static readonly object _crawlerLock = new object();
 
         public HomeController(IServiceScopeFactory scopeFactory, ILogger<HomeController> logger, SearchContext context)
         {
@@ -40,160 +38,301 @@ namespace CrowlerSj.Controllers
 
         public IActionResult Index()
         {
-            var setting = _context.Settings.ToList().FirstOrDefault();
-            _isCrawlerRunning = setting.IsCrowl;
-            ViewBag.IsCrawlerRunning = _isCrawlerRunning;
-            return View();
-        }
+            try
+            {
+                using (var scope = _scopeFactory.CreateScope())
+                {
+                    var context = scope.ServiceProvider.GetRequiredService<SearchContext>();
+                    // فقط برای اطمینان از وجود تنظیمات
+                    var setting = context.Settings.FirstOrDefault();
+                    if (setting == null)
+                    {
+                        setting = new Setting { Id = 1, IsCrowl = false };
+                        context.Settings.Add(setting);
+                        context.SaveChanges();
+                        _logger.LogInformation("جدول Settings خالی بود. ردیف جدید ایجاد شد.");
+                    }
 
+                    // لود لاگ‌ها با بهینه‌سازی
+                    ViewBag.Logs = context.Logs
+                        .OrderByDescending(l => l.Timestamp)
+                        .Take(50)
+                        .AsNoTracking()
+                        .ToList();
+                }
+
+                return View();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError($"خطا در بارگذاری صفحه Index: {ex.Message}");
+                SaveLog($"خطا در بارگذاری صفحه Index: {ex.Message}", "Error");
+                ViewBag.ErrorMessage = $"خطا در بارگذاری صفحه: {ex.Message}";
+                return View();
+            }
+        }
 
         [HttpPost]
         public IActionResult Start(string search, long crowlId)
         {
-            _logger.LogInformation("Index method called. Starting crawler.");
-            _isCrawlerRunning = true;
-
-            var setting = _context.Settings.FirstOrDefault();
-            if (setting != null)
+            lock (_crawlerLock)
             {
-                setting.IsCrowl = _isCrawlerRunning;
-                _context.SaveChanges();
+                if (_isCrawlerRunning)
+                {
+                    _logger.LogWarning("کرولر در حال اجراست. لطفاً برنامه را متوقف کنید.");
+                    SaveLog("کرولر در حال اجراست. لطفاً برنامه را متوقف کنید.", "Warning");
+                    return RedirectToAction("Index");
+                }
+
+                CleanupProcesses();
+
+                _logger.LogInformation("شروع کرولر با کلمه جستجو: {search}", search);
+
+                long validCrowlId;
+                int startPage = 1;
+
+                using (var scope = _scopeFactory.CreateScope())
+                {
+                    var context = scope.ServiceProvider.GetRequiredService<SearchContext>();
+                    try
+                    {
+                        if (crowlId > 0 && context.Crowls.Any(c => c.Id == crowlId))
+                        {
+                            var crowl = context.Crowls.FirstOrDefault(c => c.Id == crowlId);
+                            startPage = crowl.CurrentPage;
+                            validCrowlId = crowlId;
+                            search = crowl.Title; // استفاده از عنوان کرول موجود
+                            _logger.LogInformation($"ادامه کرول با Id: {validCrowlId}, صفحه: {startPage}");
+                        }
+                        else
+                        {
+                            if (string.IsNullOrWhiteSpace(search))
+                            {
+                                _logger.LogError("کلمه جستجو خالی است.");
+                                SaveLog("کلمه جستجو خالی است.", "Error");
+                                return StatusCode(400, "کلمه جستجو نمی‌تواند خالی باشد.");
+                            }
+                            var crowl = new Crowl { Title = search, CurrentPage = 1, InsertTime = DateTime.Now };
+                            context.Crowls.Add(crowl);
+                            context.SaveChanges();
+                            validCrowlId = crowl.Id;
+                            _logger.LogInformation($"کرول جدید ساخته شد با Id: {validCrowlId}");
+                        }
+
+                        SaveLog($"شروع کرولر با کلمه جستجو: {search}", "Information", validCrowlId);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError($"خطا در ایجاد کرول: {ex.Message}");
+                        SaveLog($"خطا در ایجاد کرول: {ex.Message}", "Error");
+                        return StatusCode(500, $"خطا در شروع کرولر: {ex.Message}");
+                    }
+                }
+
+                _isCrawlerRunning = true;
+                using (var scope = _scopeFactory.CreateScope())
+                {
+                    var context = scope.ServiceProvider.GetRequiredService<SearchContext>();
+                    try
+                    {
+                        var setting = context.Settings.FirstOrDefault();
+                        if (setting == null)
+                        {
+                            setting = new Setting { Id = 1, IsCrowl = true };
+                            context.Settings.Add(setting);
+                        }
+                        else
+                        {
+                            setting.IsCrowl = true;
+                        }
+                        context.SaveChanges();
+                        _logger.LogInformation($"تنظیمات دیتابیس آپدیت شد: IsCrowl = true برای کرول Id {validCrowlId}");
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError($"خطا در آپدیت تنظیمات: {ex.Message}");
+                        SaveLog($"خطا در آپدیت تنظیمات: {ex.Message}", "Error");
+                    }
+                }
+
+                _cancellationTokenSource?.Dispose();
+                _cancellationTokenSource = new CancellationTokenSource();
+                Task.Run(async () =>
+                {
+                    try
+                    {
+                        await CrawlAsync(search, validCrowlId, startPage, _cancellationTokenSource.Token);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError($"خطا در اجرای کرول: {ex.Message}");
+                        SaveLog($"خطا در اجرای کرول: {ex.Message}", "Error", validCrowlId);
+                        ResetCrawlerState(validCrowlId);
+                    }
+                }, _cancellationTokenSource.Token);
+
+                return RedirectToAction("Index");
             }
-
-            if (crowlId ==0 )
-            {
-                var crowl = _context.Crowls.Add(new Crowl {Title=search });
-                _context.SaveChanges();
-                crowlId = crowl.Entity.Id;
-
-            }
-
-            _cancellationTokenSource = new CancellationTokenSource();
-            Task.Run(() => Crawl(search, crowlId, _cancellationTokenSource.Token), _cancellationTokenSource.Token);
-            return Redirect("~/home/index");
         }
 
-        [HttpPost]
-        public IActionResult Stop()
+        private void CleanupProcesses()
         {
-            if (_isCrawlerRunning)
+            foreach (var process in Process.GetProcessesByName("chromedriver"))
             {
-                _cancellationTokenSource.Cancel();
-                _isCrawlerRunning = false;
-                ViewBag.IsCrawlerRunning = false;
-            }
-            try
-            {
-                var chromeDriverProcesses = Process.GetProcessesByName("chromedriver");
-                foreach (var process in chromeDriverProcesses)
+                try
                 {
                     process.Kill();
+                    process.WaitForExit(2000);
+                    _logger.LogInformation($"پروسه chromedriver با PID {process.Id} بسته شد.");
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning($"خطا در بستن پروسه chromedriver: {ex.Message}");
                 }
             }
-            catch (Exception ex)
+
+            foreach (var process in Process.GetProcessesByName("chrome"))
             {
-                _logger.LogError($"Error while closing ChromeDriver processes: {ex.Message}");
+                if (process.MainWindowTitle.Contains("Bing"))
+                {
+                    try
+                    {
+                        process.Kill();
+                        process.WaitForExit(2000);
+                        _logger.LogInformation($"پروسه chrome با PID {process.Id} بسته شد.");
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning($"خطا در بستن پروسه chrome: {ex.Message}");
+                    }
+                }
             }
-
-
-            var setting = _context.Settings.FirstOrDefault();
-            if (setting != null)
-            {
-                setting.IsCrowl = _isCrawlerRunning;
-                _context.SaveChanges();
-            }
-
-            // اینجا به کلاینت‌ها پیغام ارسال می‌کنیم
-            var hubContext = (IHubContext<CrawlerHub>)HttpContext.RequestServices.GetService(typeof(IHubContext<CrawlerHub>));
-            hubContext.Clients.All.SendAsync("ReceiveMessage", "Crawler stopped");
-
-            return RedirectToAction("Index");
         }
-        private void Crawl(string search, long crowlId, CancellationToken token)
+
+        private async Task CrawlAsync(string search, long crowlId, int startPage, CancellationToken token)
         {
-            int retryLimit = 3;
+            const int retryLimit = 3;
             int retries = 0;
 
             while (!token.IsCancellationRequested && _isCrawlerRunning && retries < retryLimit)
             {
-                _logger.LogInformation("Crawl method started.");
+                _logger.LogInformation("شروع عملیات کرول.");
+                SaveLog("شروع عملیات کرول.", "Information", crowlId);
 
                 var queries = GetSearchKeywords(search);
                 var options = new ChromeOptions();
                 options.AddArgument("--disable-gpu");
 
-                using (IWebDriver driver = new ChromeDriver(options))
+                try
                 {
-                    int currentPage = 1;
-                    try
+                    using (IWebDriver driver = new ChromeDriver(options))
                     {
-                        foreach (var query in queries)
-                        {
-                            if (token.IsCancellationRequested)
-                            {
-                                _logger.LogInformation("Crawl operation canceled before processing.");
-                                return;
-                            }
-
-                            // Navigate and process each query result
-                            NavigateAndProcessResults(driver, query, ref currentPage, crowlId);
-
-                            if (token.IsCancellationRequested)
-                            {
-                                _logger.LogInformation("Crawl operation canceled after processing.");
-                                return;
-                            }
-                        }
-
-                        retries = 0;
-                    }
-                    catch (WebDriverException ex)
-                    {
-                        _logger.LogError($"WebDriverException caught on page {currentPage}: {ex.Message}");
-                        HandleError(ex, currentPage);
-                        retries++;
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError($"Exception caught on page {currentPage}: {ex.Message}");
-                        HandleError(ex, currentPage);
-                        retries++;
-                    }
-                    finally
-                    {
-                        driver.Quit(); // Ensure all resources are freed
-
-
+                        int currentPage = startPage;
                         try
                         {
-                            var chromeTabs = Process.GetProcessesByName("chrome").Where(p => p.MainWindowTitle.Contains("data:") || p.MainWindowTitle.Contains("about:blank"));
-                            foreach (var tab in chromeTabs)
+                            foreach (var query in queries)
                             {
-                                tab.Kill();
+                                if (token.IsCancellationRequested)
+                                {
+                                    _logger.LogInformation("عملیات کرول لغو شد.");
+                                    SaveLog("عملیات کرول لغو شد.", "Information", crowlId);
+                                    return;
+                                }
+
+                                currentPage = await NavigateAndProcessResultsAsync(driver, query, currentPage, crowlId, token);
                             }
+
+                            retries = 0;
+                        }
+                        catch (WebDriverException ex)
+                        {
+                            _logger.LogError($"خطای WebDriver در صفحه {currentPage}: {ex.Message}");
+                            SaveLog($"خطای WebDriver در صفحه {currentPage}: {ex.Message}", "Error", crowlId);
+                            retries++;
                         }
                         catch (Exception ex)
                         {
-                            _logger.LogError($"Error while closing Chrome tabs: {ex.Message}");
+                            _logger.LogError($"خطای عمومی در صفحه {currentPage}: {ex.Message}");
+                            SaveLog($"خطای عمومی در صفحه {currentPage}: {ex.Message}", "Error", crowlId);
+                            retries++;
                         }
-
-
+                        finally
+                        {
+                            try
+                            {
+                                driver.Quit();
+                                _logger.LogInformation("درایور Selenium بسته شد.");
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogWarning($"خطا در بستن درایور: {ex.Message}");
+                            }
+                        }
                     }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError($"خطا در ایجاد درایور Chrome: {ex.Message}");
+                    SaveLog($"خطا در ایجاد درایور Chrome: {ex.Message}", "Error", crowlId);
+                    retries++;
                 }
 
                 if (retries >= retryLimit)
                 {
-                    _logger.LogError("Retry limit reached. Stopping crawler.");
-                    _isCrawlerRunning = false;
+                    _logger.LogError("حداکثر تلاش‌ها انجام شد. توقف کرولر.");
+                    SaveLog("حداکثر تلاش‌ها انجام شد. توقف کرولر.", "Error", crowlId);
+                    ResetCrawlerState(crowlId);
                 }
                 else if (_isCrawlerRunning)
                 {
-                    _logger.LogInformation("Retrying crawl...");
-                    Thread.Sleep(200); // Adjust according to need
+                    _logger.LogInformation("تلاش مجدد برای کرول...");
+                    SaveLog("تلاش مجدد برای کرول...", "Information", crowlId);
+                    await Task.Delay(1000, token);
                 }
             }
 
-            _logger.LogInformation("Crawl method finished.");
+            ResetCrawlerState(crowlId);
+        }
+
+        private void ResetCrawlerState(long? crowlId = null)
+        {
+            lock (_crawlerLock)
+            {
+                _isCrawlerRunning = false;
+                using (var scope = _scopeFactory.CreateScope())
+                {
+                    var context = scope.ServiceProvider.GetRequiredService<SearchContext>();
+                    var setting = context.Settings.FirstOrDefault();
+                    if (setting != null)
+                    {
+                        setting.IsCrowl = false;
+                        try
+                        {
+                            context.SaveChanges();
+                            _logger.LogInformation("تنظیمات دیتابیس ریست شد: IsCrowl = false");
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError($"خطا در ریست تنظیمات دیتابیس: {ex.Message}");
+                            SaveLog($"خطا در ریست تنظیمات دیتابیس: {ex.Message}", "Error");
+                        }
+                    }
+                    else
+                    {
+                        setting = new Setting { Id = 1, IsCrowl = false };
+                        context.Settings.Add(setting);
+                        context.SaveChanges();
+                        _logger.LogInformation("جدول Settings خالی بود. ردیف جدید ایجاد شد: IsCrowl = false");
+                    }
+                }
+                _cancellationTokenSource?.Dispose();
+                _cancellationTokenSource = null;
+                if (crowlId.HasValue)
+                {
+                    _logger.LogInformation("عملیات کرول به پایان رسید.");
+                    SaveLog("عملیات کرول به پایان رسید.", "Information", crowlId);
+                }
+            }
         }
 
         private void SaveToDatabase(SearchResult searchResult)
@@ -201,25 +340,40 @@ namespace CrowlerSj.Controllers
             using (var scope = _scopeFactory.CreateScope())
             {
                 var context = scope.ServiceProvider.GetRequiredService<SearchContext>();
-                context.SearchResults.Add(searchResult);
-                context.SaveChanges();
-                _logger.LogInformation($"Search result saved to database: {searchResult.Link}");
+                try
+                {
+                    context.SearchResults.Add(searchResult);
+                    context.SaveChanges();
+                    _logger.LogInformation($"نتیجه جستجو ذخیره شد: {searchResult.Link}");
+                    SaveLog($"نتیجه جستجو ذخیره شد: {searchResult.Link}", "Information", searchResult.CrowlId);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError($"خطا در ذخیره نتیجه جستجو: {ex.Message}");
+                    SaveLog($"خطا در ذخیره نتیجه جستجو: {ex.Message}", "Error", searchResult.CrowlId);
+                }
             }
         }
-        private void ProcessCurrentPageResults(IWebDriver driver, int currentPage, long crowlId)
+
+        private async Task ProcessCurrentPageResultsAsync(IWebDriver driver, int currentPage, long crowlId, CancellationToken token)
         {
             var searchResults = driver.FindElements(By.CssSelector(".b_algo"));
-
-            if (searchResults.Count == 0)
+            if (!searchResults.Any())
             {
-                return; // No results to process
+                _logger.LogInformation("هیچ نتیجه‌ای در صفحه یافت نشد.");
+                SaveLog("هیچ نتیجه‌ای در صفحه یافت نشد.", "Information", crowlId);
+                return;
             }
 
             foreach (var result in searchResults)
             {
+                if (token.IsCancellationRequested)
+                {
+                    return;
+                }
+
                 try
                 {
-                    _logger.LogInformation("Processing search result.");
                     var titleElement = result.FindElement(By.CssSelector("h2 a"));
                     var linkElement = result.FindElement(By.CssSelector("h2 a"));
 
@@ -227,75 +381,138 @@ namespace CrowlerSj.Controllers
                     {
                         Title = titleElement.Text,
                         Link = linkElement.GetAttribute("href"),
-                        Snippet = result.Text
+                        Snippet = result.Text,
+                        CrowlId = crowlId
                     };
 
-                    _logger.LogInformation($"Title: {searchResult.Title}, Link: {searchResult.Link}");
-
-                    // Check if the link has been processed before
                     if (IsLinkAlreadyProcessed(searchResult.Link))
                     {
-                        _logger.LogInformation($"Link '{searchResult.Link}' has already been processed. Skipping...");
+                        _logger.LogInformation($"لینک '{searchResult.Link}' قبلاً پردازش شده. رد شدن...");
+                        SaveLog($"لینک '{searchResult.Link}' قبلاً پردازش شده. رد شدن...", "Information", crowlId);
                         continue;
                     }
 
-                    // Open the link in a new tab
                     ((IJavaScriptExecutor)driver).ExecuteScript("window.open();");
                     driver.SwitchTo().Window(driver.WindowHandles.Last());
                     driver.Navigate().GoToUrl(searchResult.Link);
-                    Thread.Sleep(1000);
+                    await Task.Delay(1000, token);
 
-                    // Check if the page load time is acceptable
-                    if (!IsPageLoadTimeAcceptable(driver, 3))
+                    if (!IsPageLoadTimeAcceptable(driver, 5))
                     {
-                        _logger.LogInformation($"Page load time for link '{searchResult.Link}' exceeds 3 seconds. Skipping...");
+                        _logger.LogInformation($"زمان لود صفحه '{searchResult.Link}' بیش از 5 ثانیه است. رد شدن...");
+                        SaveLog($"زمان لود صفحه '{searchResult.Link}' بیش از 5 ثانیه است. رد شدن...", "Information", crowlId);
                         driver.Close();
                         driver.SwitchTo().Window(driver.WindowHandles.First());
                         continue;
                     }
 
-                    // Extract phone number
                     searchResult.Phone = ExtractPhoneNumber(driver.PageSource);
                     searchResult.Address = ExtractAddress(driver.PageSource);
                     searchResult.Category = ExtractCategory(driver.PageSource);
-                    searchResult.CrowlId = crowlId;
 
-                    // Save the result to the database
                     SaveToDatabase(searchResult);
 
-                    // Close the tab and switch back to the main tab
                     driver.Close();
                     driver.SwitchTo().Window(driver.WindowHandles.First());
                 }
-                catch (NoSuchElementException ex)
-                {
-                    _logger.LogWarning($"NoSuchElementException caught on page {currentPage}: {ex.Message}");
-                    SaveErrorLog(ex, currentPage);
-                    driver.SwitchTo().Window(driver.WindowHandles.First());
-                    continue;
-                }
-                catch (WebDriverException ex)
-                {
-                    _logger.LogError($"WebDriverException caught on page {currentPage}: {ex.Message}");
-                    SaveErrorLog(ex, currentPage);
-                    driver.SwitchTo().Window(driver.WindowHandles.First());
-                    continue;
-                }
                 catch (Exception ex)
                 {
-                    _logger.LogError($"Exception caught on page {currentPage}: {ex.Message}");
-                    SaveErrorLog(ex, currentPage);
-                    driver.SwitchTo().Window(driver.WindowHandles.First());
-                    continue;
+                    _logger.LogError($"خطا در پردازش نتیجه صفحه {currentPage}: {ex.Message}");
+                    SaveLog($"خطا در پردازش نتیجه صفحه {currentPage}: {ex.Message}", "Error", crowlId);
+                    if (driver.WindowHandles.Count > 1)
+                    {
+                        driver.Close();
+                        driver.SwitchTo().Window(driver.WindowHandles.First());
+                    }
+                }
+            }
+
+            using (var scope = _scopeFactory.CreateScope())
+            {
+                var context = scope.ServiceProvider.GetRequiredService<SearchContext>();
+                var crowl = context.Crowls.FirstOrDefault(c => c.Id == crowlId);
+                if (crowl != null)
+                {
+                    crowl.CurrentPage = currentPage;
+                    try
+                    {
+                        context.SaveChanges();
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError($"خطا در آپدیت صفحه کرول: {ex.Message}");
+                        SaveLog($"خطا در آپدیت صفحه کرول: {ex.Message}", "Error", crowlId);
+                    }
                 }
             }
         }
+
+        private async Task<int> NavigateAndProcessResultsAsync(IWebDriver driver, string query, int currentPage, long crowlId, CancellationToken token)
+        {
+            _logger.LogInformation($"رفتن به جستجوی بینگ با کلمه: {query}");
+            SaveLog($"رفتن به جستجوی بینگ با کلمه: {query}", "Information", crowlId);
+            driver.Navigate().GoToUrl($"https://www.bing.com/search?q={Uri.EscapeDataString(query)}&first={(currentPage - 1) * 10}");
+            await Task.Delay(1000, token);
+
+            if (HandleConsentOrCaptcha(driver))
+            {
+                _logger.LogInformation("کپچا شناسایی شد. نیاز به دخالت دستی.");
+                SaveLog("کپچا شناسایی شد. نیاز به دخالت دستی.", "Warning", crowlId);
+                Console.ReadLine();
+            }
+
+            int maxPageAttempts = 3;
+            int pageAttempts = 0;
+
+            while (true)
+            {
+                if (token.IsCancellationRequested)
+                {
+                    return currentPage;
+                }
+
+                await ProcessCurrentPageResultsAsync(driver, currentPage, crowlId, token);
+
+                try
+                {
+                    var nextPageElement = driver.FindElements(By.CssSelector(".sb_pagN")).FirstOrDefault()
+                        ?? driver.FindElements(By.CssSelector("a[title='Next page']")).FirstOrDefault();
+                    if (nextPageElement == null || pageAttempts >= maxPageAttempts)
+                    {
+                        _logger.LogInformation("صفحه بعدی وجود ندارد یا تلاش‌ها تمام شد.");
+                        SaveLog("صفحه بعدی وجود ندارد یا تلاش‌ها تمام شد.", "Information", crowlId);
+                        break;
+                    }
+
+                    _logger.LogInformation($"رفتن به صفحه بعدی: {currentPage + 1}");
+                    SaveLog($"رفتن به صفحه بعدی: {currentPage + 1}", "Information", crowlId);
+                    nextPageElement.Click();
+                    await Task.Delay(new Random().Next(2000, 4000), token);
+                    currentPage++;
+                    pageAttempts = 0;
+
+                    if (HandleConsentOrCaptcha(driver))
+                    {
+                        _logger.LogInformation("کپچا شناسایی شد. نیاز به دخالت دستی.");
+                        SaveLog("کپچا شناسایی شد. نیاز به دخالت دستی.", "Warning", crowlId);
+                        Console.ReadLine();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError($"خطا در رفتن به صفحه بعدی: {ex.Message}");
+                    SaveLog($"خطا در رفتن به صفحه بعدی: {ex.Message}", "Error", crowlId);
+                    pageAttempts++;
+                    await Task.Delay(2000, token);
+                }
+            }
+
+            return currentPage;
+        }
+
         private List<string> GetSearchKeywords(string search)
         {
-            return new List<string>
-            {
-                search
-            };
+            return new List<string> { search };
         }
 
         private string ExtractPhoneNumber(string html)
@@ -303,19 +520,14 @@ namespace CrowlerSj.Controllers
             var phoneMatches = Regex.Matches(html, @"((0?9)|(\+?989))\d{2}\W?\d{3}\W?\d{4}|^0\d{2,3}-\d{8}$");
             if (phoneMatches.Count > 0)
             {
-                StringBuilder phoneNumberBuilder = new StringBuilder();
+                var phoneNumberBuilder = new StringBuilder();
                 foreach (Match match in phoneMatches)
                 {
-                    phoneNumberBuilder.Append(match.Value);
-                    phoneNumberBuilder.Append(", "); // اضافه کردن جداکننده بین شماره‌ها
+                    phoneNumberBuilder.Append(match.Value + ", ");
                 }
-                phoneNumberBuilder.Remove(phoneNumberBuilder.Length - 2, 2); // حذف آخرین کاراکتر اضافه شده (جداکننده اضافی)
-                return phoneNumberBuilder.ToString();
+                return phoneNumberBuilder.ToString().TrimEnd(',', ' ');
             }
-            else
-            {
-                return "Not Found";
-            }
+            return "Not Found";
         }
 
         private bool IsLinkAlreadyProcessed(string link)
@@ -326,54 +538,34 @@ namespace CrowlerSj.Controllers
                 return context.SearchResults.Any(r => r.Link == link);
             }
         }
-     
-        private void HandleError(Exception ex, int currentPage)
+
+        private void SaveLog(string message, string level, long? crowlId = null)
         {
-            SaveErrorLog(ex, currentPage);
-            // اعمال دیگری که ممکن است برای مدیریت خطاها مورد نیاز باشد
-        }
-
-        private void NavigateAndProcessResults(IWebDriver driver, string query, ref int currentPage, long crowlId)
-        {
-            _logger.LogInformation($"Navigating to Bing search with query: {query}");
-            driver.Navigate().GoToUrl($"https://www.bing.com/search?q={query}");
-            Thread.Sleep(1000);
-
-            if (NeedManualIntervention(driver))
+            using (var scope = _scopeFactory.CreateScope())
             {
-                _logger.LogInformation("Manual intervention needed. Please solve the CAPTCHA or accept the cookies in your browser and then press Enter to continue...");
-                Console.ReadLine();
-            }
-
-            while (true) // Infinite loop to process all search results
-            {
-                ProcessCurrentPageResults(driver, currentPage,  crowlId);
-
-                var nextPageElement = driver.FindElements(By.CssSelector(".sb_pagN")).FirstOrDefault();
-                if (nextPageElement == null)
+                var context = scope.ServiceProvider.GetRequiredService<SearchContext>();
+                if (crowlId.HasValue && !context.Crowls.Any(c => c.Id == crowlId.Value))
                 {
-                    // No more pages, break out of the loop
-                    break;
+                    _logger.LogWarning($"CrowlId {crowlId} نامعتبر است. لاگ بدون CrowlId ذخیره می‌شود.");
+                    crowlId = null;
                 }
 
-                _logger.LogInformation($"Navigating to next page: {currentPage + 1}");
-                nextPageElement.Click();
-                Thread.Sleep(2000); // Wait for the next page to load
-                currentPage++;
-
-                if (NeedManualIntervention(driver))
+                try
                 {
-                    _logger.LogInformation("Manual intervention needed. Please solve the CAPTCHA or accept the cookies in your browser and then press Enter to continue...");
-                    Console.ReadLine();
+                    context.Logs.Add(new Log
+                    {
+                        Message = message,
+                        Level = level,
+                        CrowlId = crowlId,
+                        Timestamp = DateTime.Now
+                    });
+                    context.SaveChanges();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError($"خطا در ذخیره لاگ: {ex.Message}");
                 }
             }
-        }
-     
-        private void SaveErrorLog(Exception ex, int currentPage)
-        {
-            // مثال ساده برای ذخیره لاگ خطاها
-            _logger.LogError($"Error on page {currentPage}: {ex.Message}");
-            // می‌توانید لاگ خطا را در دیتابیس یا فایل ذخیره کنید
         }
 
         private bool IsPageLoadTimeAcceptable(IWebDriver driver, int maxLoadTimeInSeconds)
@@ -390,21 +582,15 @@ namespace CrowlerSj.Controllers
             }
         }
 
-        private void SaveErrorLog(Exception ex)
-        {
-            // Save error details to a file or database for further analysis
-            _logger.LogError($"Error: {ex}");
-        }
-
-     
-
-        private bool NeedManualIntervention(IWebDriver driver)
+        private bool HandleConsentOrCaptcha(IWebDriver driver)
         {
             try
             {
                 var captcha = driver.FindElement(By.CssSelector("div#recaptcha"));
                 if (captcha.Displayed)
                 {
+                    _logger.LogInformation("کپچا شناسایی شد. نیاز به دخالت دستی.");
+                    SaveLog("کپچا شناسایی شد. نیاز به دخالت دستی.", "Warning");
                     return true;
                 }
             }
@@ -412,10 +598,14 @@ namespace CrowlerSj.Controllers
 
             try
             {
-                var cookieMessage = driver.FindElement(By.CssSelector("div#cookieConsent"));
-                if (cookieMessage.Displayed)
+                var cookieAcceptLink = driver.FindElement(By.CssSelector("div#bnp_btn_accept a"));
+                if (cookieAcceptLink.Displayed)
                 {
-                    return true;
+                    cookieAcceptLink.Click();
+                    Thread.Sleep(1000);
+                    _logger.LogInformation("دکمه پذیرش کوکی‌ها کلیک شد.");
+                    SaveLog("دکمه پذیرش کوکی‌ها کلیک شد.", "Information");
+                    return false;
                 }
             }
             catch (NoSuchElementException) { }
@@ -431,85 +621,28 @@ namespace CrowlerSj.Controllers
 
         private string ExtractEmail(string html)
         {
-            var addressMatch = Regex.Match(html, @"([A-Za-z0-9]+[.-_])*[A-Za-z0-9]+@[A-Za-z0-9-]+(\.[A-Z|a-z]{2,})+");
-            return addressMatch.Success ? addressMatch.Value : "Not Found";
+            var emailMatch = Regex.Match(html, @"([A-Za-z0-9]+[.-_])*[A-Za-z0-9]+@[A-Za-z0-9-]+(\.[A-Z|a-z]{2,})+");
+            return emailMatch.Success ? emailMatch.Value : "Not Found";
         }
 
         private string ExtractCategory(string html)
         {
-            string result = "";
-            if (html.Contains("فروش"))
-            {
-                result += "+فروش";
-            }
-            if (html.Contains("تعمیرات"))
-            {
-                result += "+تعمیرات";
-            }
-            if (html.Contains("نصب"))
-            {
-                result += "+نصب";
-            }
-            if (string.IsNullOrEmpty(result))
-            {
-                result = "نامشخص";
-            }
-            return result;
+            var result = new StringBuilder();
+            if (html.Contains("فروش")) result.Append("+فروش");
+            if (html.Contains("تعمیرات")) result.Append("+تعمیرات");
+            if (html.Contains("نصب")) result.Append("+نصب");
+            return result.Length > 0 ? result.ToString() : "نامشخص";
         }
-
-      
 
         public IActionResult List()
         {
             using (var scope = _scopeFactory.CreateScope())
             {
                 var context = scope.ServiceProvider.GetRequiredService<SearchContext>();
-                var reports = context.Crowls.ToList();
-                _logger.LogInformation($"{reports.Count} items retrieved from database for reports.");
-
-              
+                var reports = context.Crowls.AsNoTracking().ToList();
+                _logger.LogInformation($"{reports.Count} کرول از دیتابیس بازیابی شد.");
+                SaveLog($"{reports.Count} کرول از دیتابیس بازیابی شد.", "Information");
                 return View(reports);
-            }
-        }
-        public IActionResult Delete(long crowlId)
-        {
-            using (var scope = _scopeFactory.CreateScope())
-            {
-                var context = scope.ServiceProvider.GetRequiredService<SearchContext>();
-
-                try
-                {
-                    // پیدا کردن Crowl با crowlId
-                    var crowl = context.Crowls
-                        .Include(c => c.SearchResults) // لود کردن SearchResults مرتبط
-                        .FirstOrDefault(c => c.Id == crowlId);
-
-                    if (crowl == null)
-                    {
-                        return NotFound();
-                    }
-
-                    // حذف SearchResults مرتبط
-                    if (crowl.SearchResults?.Any() == true)
-                    {
-                        context.SearchResults.RemoveRange(crowl.SearchResults);
-                    }
-
-                    // حذف خود Crowl
-                    context.Crowls.Remove(crowl);
-
-                    // ذخیره تغییرات
-                    context.SaveChanges();
-                }
-                catch (Exception ex)
-                {
-                    // فقط یه لاگ ساده برای دیباگ
-                    System.Diagnostics.Debug.WriteLine($"Error deleting Crowl ID {crowlId}: {ex.Message}");
-                    return StatusCode(500, "An error occurred while deleting the record.");
-                }
-
-                // ریدایرکت به لیست
-                return Redirect("~/home/list");
             }
         }
 
@@ -519,21 +652,63 @@ namespace CrowlerSj.Controllers
             {
                 var context = scope.ServiceProvider.GetRequiredService<SearchContext>();
                 var reports = context.SearchResults
-                    .Where(r => r.CrowlId == crowlId) // اعمال شرط تاریخ
+                    .Where(r => r.CrowlId == crowlId)
+                    .AsNoTracking()
                     .ToList();
 
-                if (reports.Any())
-                {
-                    _logger.LogInformation($"{reports.Count} items retrieved for the selected date.");
-                }
-                else
-                {
-                    _logger.LogWarning("No reports found for the selected date.");
-                }
+                var message = reports.Any()
+                    ? $"{reports.Count} نتیجه برای کرول {crowlId} یافت شد."
+                    : $"هیچ نتیجه‌ای برای کرول {crowlId} یافت نشد.";
+                _logger.LogInformation(message);
+                SaveLog(message, "Information", crowlId);
 
-                return View(reports); // در صورت نیاز ویوی دیگری برگردانده شود
+                return View(reports);
             }
         }
+
+        public IActionResult Delete(long crowlId)
+        {
+            using (var scope = _scopeFactory.CreateScope())
+            {
+                var context = scope.ServiceProvider.GetRequiredService<SearchContext>();
+
+                try
+                {
+                    var crowl = context.Crowls
+                        .Include(c => c.SearchResults)
+                        .Include(c => c.Logs)
+                        .FirstOrDefault(c => c.Id == crowlId);
+
+                    if (crowl == null)
+                    {
+                        return NotFound();
+                    }
+
+                    if (crowl.SearchResults?.Any() == true)
+                    {
+                        context.SearchResults.RemoveRange(crowl.SearchResults);
+                    }
+                    if (crowl.Logs?.Any() == true)
+                    {
+                        context.Logs.RemoveRange(crowl.Logs);
+                    }
+
+                    context.Crowls.Remove(crowl);
+                    context.SaveChanges();
+                    _logger.LogInformation($"کرول {crowlId} با موفقیت حذف شد.");
+                    SaveLog($"کرول {crowlId} با موفقیت حذف شد.", "Information");
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError($"خطا در حذف کرول {crowlId}: {ex.Message}");
+                    SaveLog($"خطا در حذف کرول {crowlId}: {ex.Message}", "Error");
+                    return StatusCode(500, "خطا در حذف کرول.");
+                }
+
+                return Redirect("~/home/list");
+            }
+        }
+
         [HttpGet]
         public IActionResult DownloadExcel()
         {
@@ -542,19 +717,17 @@ namespace CrowlerSj.Controllers
                 var worksheet = workbook.Worksheets.Add("Search Results");
                 var currentRow = 1;
 
-                // هدرها
-                worksheet.Cell(currentRow, 1).Value = "Title";
-                worksheet.Cell(currentRow, 2).Value = "Snippet";
-                worksheet.Cell(currentRow, 3).Value = "Phone";
-                worksheet.Cell(currentRow, 4).Value = "Address";
-                worksheet.Cell(currentRow, 5).Value = "Category";
-                worksheet.Cell(currentRow, 6).Value = "Link";
+                worksheet.Cell(currentRow, 1).Value = "عنوان";
+                worksheet.Cell(currentRow, 2).Value = "خلاصه";
+                worksheet.Cell(currentRow, 3).Value = "تلفن";
+                worksheet.Cell(currentRow, 4).Value = "آدرس";
+                worksheet.Cell(currentRow, 5).Value = "دسته‌بندی";
+                worksheet.Cell(currentRow, 6).Value = "لینک";
 
-                // داده‌های جستجو
                 using (var scope = _scopeFactory.CreateScope())
                 {
                     var context = scope.ServiceProvider.GetRequiredService<SearchContext>();
-                    var searchResults = context.SearchResults.ToList();
+                    var searchResults = context.SearchResults.AsNoTracking().ToList();
 
                     foreach (var result in searchResults)
                     {

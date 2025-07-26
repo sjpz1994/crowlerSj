@@ -1,4 +1,5 @@
-﻿using System;
+﻿using crowlerSj.Models;
+using System;
 
 public class SearchResult
 {

@@ -1,9 +1,4 @@
-﻿
-@{
-    ViewData["Title"] = "List";
-    Layout = "~/Views/Shared/_Layout.cshtml";
-}
-@model List<Crowl>
+﻿@model List<Crowl>
 
 <div class="container mt-4">
     <div class="row">
@@ -14,8 +9,12 @@
                 {
                     <li class="list-group-item d-flex justify-content-between align-items-center">
                         @d.InsertTime.ToString("yyyy/MM/dd HH:mm")
-                        <span> _ </span>
-                        @d.Title
+                        <span> @d.Title</span>
+                        <form method="post" asp-controller="Home" asp-action="Start" style="display:inline;">
+                            <input type="hidden" value="@d.Title" name="search" />
+                            <input type="hidden" value="@d.Id" name="crowlId" />
+                            <button type="submit" class="btn btn-success btn-sm">▶ ادامه</button>
+                        </form>
                         <a href="~/home/reports?crowlId=@d.Id" class="btn btn-primary btn-sm">مشاهده</a>
                         <a href="~/home/delete?crowlId=@d.Id" class="btn btn-danger btn-sm">حذف</a>
                     </li>

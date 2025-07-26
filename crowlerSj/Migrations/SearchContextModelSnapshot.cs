@@ -19,24 +19,6 @@ namespace crowlerSj.Migrations
                 .HasAnnotation("ProductVersion", "5.0.17")
                 .HasAnnotation("SqlServer:ValueGenerationStrategy", SqlServerValueGenerationStrategy.IdentityColumn);
 
-            modelBuilder.Entity("Crowl", b =>
-                {
-                    b.Property<long>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("bigint")
-                        .HasAnnotation("SqlServer:ValueGenerationStrategy", SqlServerValueGenerationStrategy.IdentityColumn);
-
-                    b.Property<DateTime>("InsertTime")
-                        .HasColumnType("datetime2");
-
-                    b.Property<string>("Title")
-                        .HasColumnType("nvarchar(max)");
-
-                    b.HasKey("Id");
-
-                    b.ToTable("Crowls");
-                });
-
             modelBuilder.Entity("SearchResult", b =>
                 {
                     b.Property<long>("Id")
@@ -100,9 +82,56 @@ namespace crowlerSj.Migrations
                         });
                 });
 
+            modelBuilder.Entity("crowlerSj.Models.Crowl", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasAnnotation("SqlServer:ValueGenerationStrategy", SqlServerValueGenerationStrategy.IdentityColumn);
+
+                    b.Property<int>("CurrentPage")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("InsertTime")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Title")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("Crowls");
+                });
+
+            modelBuilder.Entity("crowlerSj.Models.Log", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasAnnotation("SqlServer:ValueGenerationStrategy", SqlServerValueGenerationStrategy.IdentityColumn);
+
+                    b.Property<long?>("CrowlId")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("Level")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("Message")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<DateTime>("Timestamp")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CrowlId");
+
+                    b.ToTable("Logs");
+                });
+
             modelBuilder.Entity("SearchResult", b =>
                 {
-                    b.HasOne("Crowl", "Crowl")
+                    b.HasOne("crowlerSj.Models.Crowl", "Crowl")
                         .WithMany("SearchResults")
                         .HasForeignKey("CrowlId")
                         .OnDelete(DeleteBehavior.Cascade)
@@ -111,8 +140,19 @@ namespace crowlerSj.Migrations
                     b.Navigation("Crowl");
                 });
 
-            modelBuilder.Entity("Crowl", b =>
+            modelBuilder.Entity("crowlerSj.Models.Log", b =>
                 {
+                    b.HasOne("crowlerSj.Models.Crowl", "Crowl")
+                        .WithMany("Logs")
+                        .HasForeignKey("CrowlId");
+
+                    b.Navigation("Crowl");
+                });
+
+            modelBuilder.Entity("crowlerSj.Models.Crowl", b =>
+                {
+                    b.Navigation("Logs");
+
                     b.Navigation("SearchResults");
                 });
 #pragma warning restore 612, 618
